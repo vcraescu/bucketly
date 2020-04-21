@@ -1,0 +1,17 @@
+sudo: required
+language: go
+
+env:
+    COMPOSE_VERSION: 1.25.0
+
+services:
+    - docker
+
+before_install:
+    - curl -L https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` > docker-compose
+    - chmod +x docker-compose
+    - sudo mv docker-compose /usr/local/bin
+
+script:
+    - docker-compose build
+    - docker-compose run --rm test make ci-test
