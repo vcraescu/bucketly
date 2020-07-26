@@ -12,7 +12,8 @@ import (
 )
 
 var (
-	SkipWalkDir = errors.New("skip walk dir")
+	ErrSkipWalkDir = errors.New("skip walk dir")
+	ErrStopWalk    = errors.New("stop walk dir")
 )
 
 type (
@@ -28,21 +29,12 @@ type (
 
 	CopyOptions struct {
 		Metadata Metadata
+		Mode     os.FileMode
 	}
 
 	CopyOption func(o *CopyOptions)
 
 	CopyFn func(ctx context.Context, from Item, to string) error
-
-	Item interface {
-		fmt.Stringer
-		os.FileInfo
-
-		Bucket() Bucket
-		Open(context.Context) (io.ReadCloser, error)
-		ETag() (string, error)
-		Metadata() (Metadata, error)
-	}
 
 	Walkable interface {
 		Walk(ctx context.Context, dir string, walkFunc WalkFunc) error
@@ -131,6 +123,20 @@ func Base(b PathSeparable, name string) string {
 	return name
 }
 
+func Dir(b PathSeparable, name string) string {
+	if b.PathSeparator() == os.PathSeparator {
+		return filepath.Dir(name)
+	}
+
+	ps := string(b.PathSeparator())
+	name = strings.ReplaceAll(name, ps, string(os.PathSeparator))
+	name = filepath.Dir(name)
+
+	name = strings.ReplaceAll(name, string(os.PathSeparator), ps)
+
+	return name
+}
+
 func Clean(b PathSeparable, name string) string {
 	if b.PathSeparator() == os.PathSeparator {
 		return filepath.Clean(name)
@@ -178,6 +184,7 @@ func CopyAll(ctx context.Context, from Item, to Item, opts ...CopyOption) error 
 		go func() {
 			wg.Add(1)
 			defer wg.Done()
+
 			if err := cp(ctx, item, dest, opts...); err != nil {
 				errs <- err
 			}

@@ -44,7 +44,6 @@ type (
 		bucket     *Bucket
 		iter       *blob.ListIterator
 		blobBucket *blob.Bucket
-		queue      []*blob.ListObject
 	}
 
 	proxyWriteCloser struct {
@@ -265,6 +264,14 @@ func (b *Bucket) Stat(ctx context.Context, name string) (bucketly.Item, error) {
 }
 
 func (b *Bucket) Items(name string) (bucketly.ListIterator, error) {
+	normalName := bucketly.Clean(b, name)
+	if normalName == "." {
+		normalName = string(b.PathSeparator())
+	} else if strings.HasSuffix(name, string(b.PathSeparator())) && normalName != string(b.PathSeparator()) {
+		normalName += string(b.PathSeparator())
+	}
+
+	name = normalName
 	iter := &listIterator{
 		name:   name,
 		bucket: b,
@@ -302,9 +309,13 @@ func (b *Bucket) Walk(ctx context.Context, name string, walkFunc bucketly.WalkFu
 		}
 
 		if err := walkFunc(item, err); err != nil {
-			if err == bucketly.SkipWalkDir {
+			if err == bucketly.ErrSkipWalkDir {
 				skipped = append(skipped, item.Name())
 				continue
+			}
+
+			if err == bucketly.ErrStopWalk {
+				return nil
 			}
 
 			return err
@@ -321,26 +332,19 @@ func (b *Bucket) Walk(ctx context.Context, name string, walkFunc bucketly.WalkFu
 }
 
 func (b *Bucket) NewReader(ctx context.Context, name string) (io.ReadCloser, error) {
-	bucket, err := b.openBucket(ctx)
+	if strings.HasSuffix(name, string(b.PathSeparator())) {
+		return nil, fmt.Errorf("%s is a directory", name)
+	}
+
+	out, err := b.client.GetObjectWithContext(ctx, &s3.GetObjectInput{
+		Bucket: &b.name,
+		Key:    &name,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	w, err := b.createReader(ctx, bucket, name)
-
-	if err != nil {
-		bucket.Close()
-		return nil, err
-	}
-
-	return &proxyReadCloser{
-		ReadCloser: w,
-		OnClose: func() func() error {
-			return func() error {
-				return bucket.Close()
-			}
-		},
-	}, nil
+	return out.Body, nil
 }
 
 func (b *Bucket) NewWriter(ctx context.Context, name string, opts ...bucketly.WriteOption) (io.WriteCloser, error) {
