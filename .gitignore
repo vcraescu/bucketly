@@ -2,3 +2,4 @@ localstack
 ftp
 .idea
 .env.local
+vendor/

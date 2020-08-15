@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	ErrSkipWalkDir = errors.New("skip walk dir")
-	ErrStopWalk    = errors.New("stop walk dir")
+	ErrSkipWalkDir  = errors.New("skip walk dir")
+	ErrStopWalk     = errors.New("stop walk dir")
+	ErrNotSupported = errors.New("not supported")
 )
 
 type (
@@ -138,6 +139,7 @@ func Dir(b PathSeparable, name string) string {
 }
 
 func Clean(b PathSeparable, name string) string {
+	name = strings.TrimSpace(name)
 	if b.PathSeparator() == os.PathSeparator {
 		return filepath.Clean(name)
 	}
@@ -145,19 +147,61 @@ func Clean(b PathSeparable, name string) string {
 	ps := string(b.PathSeparator())
 	name = strings.ReplaceAll(name, ps, string(os.PathSeparator))
 	name = filepath.Clean(name)
-
 	name = strings.ReplaceAll(name, string(os.PathSeparator), ps)
 
 	return name
 }
 
-func Join(b PathSeparable, elem ...string) string {
+func Sanitize(b PathSeparable, name string) (string, error) {
+	ps := string(b.PathSeparator())
+	name = Clean(b, name)
+	name, err := Abs(b, name)
+	if err != nil {
+		return "", err
+	}
+
+	name = strings.Trim(name, ".")
+	if name == ps || name == "" {
+		return string(b.PathSeparator()), nil
+	}
+
+	name = strings.TrimLeft(name, ps)
+
+	return name, nil
+}
+
+func Abs(b PathSeparable, name string) (string, error) {
+	ps := string(b.PathSeparator())
+	isAbs := strings.HasPrefix(name, ps)
+	if !isAbs {
+		name = string(b.PathSeparator()) + name
+	}
+
+	name = strings.ReplaceAll(name, ps, string(os.PathSeparator))
+	name, err := filepath.Abs(name)
+	if err != nil {
+		return "", err
+	}
+
+	name = strings.ReplaceAll(name, string(os.PathSeparator), ps)
+	if !isAbs {
+		name = strings.TrimPrefix(name, ps)
+	}
+
+	return name, nil
+}
+
+func Join(b PathSeparable, elems ...string) string {
+	for i, elem := range elems {
+		elems[i] = strings.TrimSpace(elem)
+	}
+
 	if b.PathSeparator() == os.PathSeparator {
-		return filepath.Join(elem...)
+		return filepath.Join(elems...)
 	}
 
 	ps := string(b.PathSeparator())
-	name := filepath.Join(elem...)
+	name := filepath.Join(elems...)
 	name = strings.ReplaceAll(name, string(os.PathSeparator), ps)
 
 	return name

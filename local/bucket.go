@@ -115,7 +115,7 @@ func (b *Bucket) Stat(_ context.Context, name string) (bucketly.Item, error) {
 	return b.fileInfoToItem(name, fi), nil
 }
 
-func (b *Bucket) Mkdir(_ context.Context, name string, opts ...bucketly.WriteOption) error {
+func (b *Bucket) Mkdir(ctx context.Context, name string, opts ...bucketly.WriteOption) error {
 	wo := &bucketly.WriteOptions{
 		Mode: defaultDirMode,
 	}
@@ -123,7 +123,24 @@ func (b *Bucket) Mkdir(_ context.Context, name string, opts ...bucketly.WriteOpt
 		opt(wo)
 	}
 
-	return os.Mkdir(b.realPath(name), wo.Mode)
+	item, err := b.Stat(ctx, name)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil
+		}
+	}
+
+	if item != nil && item.IsDir() {
+		return b.Chmod(ctx, name, wo.Mode)
+	}
+
+	if err := os.Mkdir(b.realPath(name), wo.Mode); err != nil {
+		if err != os.ErrExist {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (b *Bucket) MkdirAll(_ context.Context, name string, opts ...bucketly.WriteOption) error {
@@ -224,7 +241,7 @@ func (b *Bucket) CopyAll2(ctx context.Context, from string, to string, opts ...b
 
 func (b *Bucket) Walk(_ context.Context, dir string, walkFunc bucketly.WalkFunc) error {
 	dir = bucketly.Clean(b, dir)
-	return filepath.Walk(b.realPath(dir), func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(b.realPath(dir), func(path string, info os.FileInfo, err error) error {
 		name, err := filepath.Rel(b.name, path)
 		if name == dir {
 			return nil
@@ -246,6 +263,12 @@ func (b *Bucket) Walk(_ context.Context, dir string, walkFunc bucketly.WalkFunc)
 
 		return nil
 	})
+
+	if err != bucketly.ErrStopWalk {
+		return err
+	}
+
+	return nil
 }
 
 func (b *Bucket) Items(name string) (bucketly.ListIterator, error) {
@@ -259,6 +282,11 @@ func (b *Bucket) Items(name string) (bucketly.ListIterator, error) {
 }
 
 func (b *Bucket) realPath(name string) string {
+	name, err := bucketly.Sanitize(b, name)
+	if err != nil {
+		return ""
+	}
+
 	return bucketly.Join(b, b.name, name)
 }
 

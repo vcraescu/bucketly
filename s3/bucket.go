@@ -195,7 +195,12 @@ func (b *Bucket) PathSeparator() rune {
 }
 
 func (b *Bucket) Exists(ctx context.Context, name string) (bool, error) {
-	_, err := b.Stat(ctx, name)
+	name, err := sanitzePath(b, name)
+	if err != nil {
+		return false, err
+	}
+
+	_, err = b.Stat(ctx, name)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -208,6 +213,11 @@ func (b *Bucket) Exists(ctx context.Context, name string) (bool, error) {
 }
 
 func (b *Bucket) Write(ctx context.Context, name string, data []byte, opts ...bucketly.WriteOption) (int, error) {
+	name, err := sanitzePath(b, name)
+	if err != nil {
+		return 0, err
+	}
+
 	w, err := b.NewWriter(ctx, name, opts...)
 	if err != nil {
 		return 0, err
@@ -218,6 +228,11 @@ func (b *Bucket) Write(ctx context.Context, name string, data []byte, opts ...bu
 }
 
 func (b *Bucket) Read(ctx context.Context, name string) ([]byte, error) {
+	name, err := sanitzePath(b, name)
+	if err != nil {
+		return nil, err
+	}
+
 	r, err := b.NewReader(ctx, name)
 	if err != nil {
 		return nil, err
@@ -228,6 +243,11 @@ func (b *Bucket) Read(ctx context.Context, name string) ([]byte, error) {
 }
 
 func (b *Bucket) Stat(ctx context.Context, name string) (bucketly.Item, error) {
+	name, err := sanitzePath(b, name)
+	if err != nil {
+		return nil, err
+	}
+
 	out, err := b.client.GetObjectWithContext(ctx, &s3.GetObjectInput{
 		Bucket: &b.name,
 		Key:    &name,
@@ -241,7 +261,7 @@ func (b *Bucket) Stat(ctx context.Context, name string) (bucketly.Item, error) {
 	}
 
 	item := bucketly.NewItem(b, name)
-	item.SetDir(strings.HasSuffix(name, string(b.PathSeparator())))
+	item.SetDir(isDirPath(name))
 	if out.ETag != nil {
 		item.SetETag(*out.ETag)
 	}
@@ -264,6 +284,11 @@ func (b *Bucket) Stat(ctx context.Context, name string) (bucketly.Item, error) {
 }
 
 func (b *Bucket) Items(name string) (bucketly.ListIterator, error) {
+	name, err := sanitzePath(b, name)
+	if err != nil {
+		return nil, err
+	}
+
 	normalName := bucketly.Clean(b, name)
 	if normalName == "." {
 		normalName = string(b.PathSeparator())
@@ -281,6 +306,11 @@ func (b *Bucket) Items(name string) (bucketly.ListIterator, error) {
 }
 
 func (b *Bucket) Walk(ctx context.Context, name string, walkFunc bucketly.WalkFunc) error {
+	name, err := sanitzePath(b, name)
+	if err != nil {
+		return err
+	}
+
 	var skipped []string
 	isSkipped := func(name string) bool {
 		for _, s := range skipped {
@@ -332,6 +362,11 @@ func (b *Bucket) Walk(ctx context.Context, name string, walkFunc bucketly.WalkFu
 }
 
 func (b *Bucket) NewReader(ctx context.Context, name string) (io.ReadCloser, error) {
+	name, err := sanitzePath(b, name)
+	if err != nil {
+		return nil, err
+	}
+
 	if strings.HasSuffix(name, string(b.PathSeparator())) {
 		return nil, fmt.Errorf("%s is a directory", name)
 	}
@@ -380,8 +415,17 @@ func (b *Bucket) NewWriter(ctx context.Context, name string, opts ...bucketly.Wr
 }
 
 func (b *Bucket) Mkdir(ctx context.Context, name string, opts ...bucketly.WriteOption) error {
-	name = directorize(bucketly.Clean(b, name))
-	_, err := b.Write(ctx, name, []byte{}, opts...)
+	name, err := sanitzePath(b, name)
+	if err != nil {
+		return err
+	}
+
+	name = directorize(name)
+	if name == string(b.PathSeparator()) {
+		return nil
+	}
+
+	_, err = b.Write(ctx, name, []byte{}, opts...)
 
 	return err
 }
@@ -401,7 +445,7 @@ func (b *Bucket) MkdirAll(ctx context.Context, name string, opts ...bucketly.Wri
 }
 
 func (b *Bucket) Chmod(ctx context.Context, name string, mode os.FileMode) error {
-	panic("not supported")
+	return bucketly.ErrNotSupported
 }
 
 func (b *Bucket) Remove(ctx context.Context, name string) error {
