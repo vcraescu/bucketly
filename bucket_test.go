@@ -2,6 +2,8 @@ package bucketly_test
 
 import (
 	"context"
+	"fmt"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/suite"
 	"github.com/vcraescu/bucketly"
 	"github.com/vcraescu/bucketly/local"
@@ -24,29 +26,40 @@ type BucketTestSuite struct {
 
 func TestS3BucketTestSuite(t *testing.T) {
 	s := new(BucketTestSuite)
-	bucket := createS3Bucket(os.Getenv("AWS_S3_BUCKET"))
+	s.bucket = new(s3.Bucket)
 	s.newBucket = createS3Bucket
-	s.bucket = bucket
-
 	s.newBucketManager = newS3BucketManager
-	s.manager = s3.NewBucketManager(bucket.(*s3.Bucket))
 
 	suite.Run(t, s)
 }
 
 func TestLocalBucketTestSuite(t *testing.T) {
 	s := new(BucketTestSuite)
-	bucket := createLocalBucket("/tmp/test")
+	s.bucket = new(s3.Bucket)
 	s.newBucket = createLocalBucket
-	s.bucket = bucket
-
 	s.newBucketManager = newLocalBucketManager
-	s.manager = local.NewBucketManager(bucket.(*local.Bucket))
 
 	suite.Run(t, s)
 }
 
-func (suite *BucketTestSuite) TearDownSuite() {
+func (suite *BucketTestSuite) SetupTest() {
+	switch suite.bucket.(type) {
+	case *s3.Bucket:
+		suite.bucket = suite.newBucket(os.Getenv("AWS_S3_BUCKET"))
+	case *local.Bucket:
+		name := fmt.Sprintf("/tmp/bucketly-%s", uuid.New().String())
+		suite.bucket = suite.newBucket(name)
+	}
+
+	suite.manager = suite.newBucketManager(suite.bucket)
+}
+
+func (suite *BucketTestSuite) TearDownTest() {
+	ctx := context.Background()
+	if err := suite.bucket.RemoveAll(ctx, "/"); err != nil {
+		panic(err)
+	}
+
 	if err := suite.manager.Remove(context.Background()); err != nil {
 		panic(err)
 	}
@@ -101,12 +114,6 @@ func (suite *BucketTestSuite) TestMkdir() {
 				return
 			}
 
-			if test.expected != "" {
-				defer func() {
-					suite.NoError(suite.bucket.RemoveAll(ctx, test.expected))
-				}()
-			}
-
 			if !suite.NoError(suite.bucket.Mkdir(ctx, test.dir)) {
 				return
 			}
@@ -152,8 +159,6 @@ func (suite *BucketTestSuite) TestMkdirAll() {
 		}
 		suite.True(fi.IsDir(), i)
 	}
-
-	suite.NoError(suite.bucket.RemoveAll(ctx, "test_mkdir_all/"))
 }
 
 func (suite *BucketTestSuite) TestExists() {
@@ -199,8 +204,6 @@ func (suite *BucketTestSuite) TestExists() {
 		}
 		suite.Equal(test.exists, found, i)
 	}
-
-	suite.NoError(suite.bucket.RemoveAll(ctx, "test_exists/"))
 }
 
 func (suite *BucketTestSuite) TestReadWrite() {
@@ -209,23 +212,16 @@ func (suite *BucketTestSuite) TestReadWrite() {
 		name     string
 		filename string
 		content  []byte
-		remove   []string
 	}{
 		{
 			name:     "root file",
 			filename: "test_read_write.txt",
 			content:  []byte("12345"),
-			remove: []string{
-				"test_read_write.txt",
-			},
 		},
 		{
 			name:     "deep file",
 			filename: "test_read_write/test2/test3/test123",
 			content:  []byte("12345"),
-			remove: []string{
-				"test_read_write/",
-			},
 		},
 	}
 	for _, test := range tests {
@@ -234,11 +230,6 @@ func (suite *BucketTestSuite) TestReadWrite() {
 			if !suite.NoError(err) {
 				return
 			}
-			defer func() {
-				for _, f := range test.remove {
-					suite.bucket.RemoveAll(ctx, f)
-				}
-			}()
 
 			suite.Equal(len(test.content), c)
 			b, err := suite.bucket.Read(ctx, test.filename)
@@ -254,28 +245,19 @@ func (suite *BucketTestSuite) TestReadWrite() {
 func (suite *BucketTestSuite) TestCopy2() {
 	ctx := context.Background()
 	tests := []struct {
-		name   string
-		from   string
-		to     string
-		remove []string
+		name string
+		from string
+		to   string
 	}{
 		{
 			name: "root file",
 			from: "test_copy2_source.txt",
 			to:   "test_copy2_dest.txt",
-			remove: []string{
-				"test_copy2_source.txt",
-				"test_copy2_dest.txt",
-			},
 		},
 		{
 			name: "deep file",
 			from: "test_copy2_source/test1/test2/test3.txt",
 			to:   "test_copy2_dest/test1/test2.txt",
-			remove: []string{
-				"test_copy2_source",
-				"test_copy2_dest",
-			},
 		},
 	}
 
@@ -285,11 +267,6 @@ func (suite *BucketTestSuite) TestCopy2() {
 			if !suite.NoError(err) {
 				return
 			}
-			defer func() {
-				for _, f := range test.remove {
-					suite.bucket.RemoveAll(ctx, f)
-				}
-			}()
 
 			err = suite.bucket.Copy2(ctx, test.from, test.to)
 			if !suite.NoError(err) {
@@ -337,9 +314,6 @@ func (suite *BucketTestSuite) TestCopyAll2() {
 			if !suite.NoError(err) {
 				return
 			}
-
-			defer suite.bucket.RemoveAll(ctx, test.from)
-			defer suite.bucket.RemoveAll(ctx, test.to)
 
 			found, err := suite.bucket.Exists(ctx, test.to)
 			if !suite.True(found) {
@@ -407,7 +381,6 @@ func (suite *BucketTestSuite) TestRename() {
 			if !suite.NoError(err, i) {
 				return
 			}
-			defer suite.bucket.RemoveAll(ctx, test.to)
 
 			found, err := suite.bucket.Exists(ctx, test.to)
 			if !suite.NoError(err, i) {
@@ -482,7 +455,6 @@ func (suite *BucketTestSuite) TestWalk() {
 	})
 	suite.NoError(err)
 	suite.Equal(expected, actual)
-	suite.NoError(suite.bucket.RemoveAll(ctx, name))
 
 	name = "test_walk.txt"
 	_, err = suite.bucket.Write(ctx, name, []byte("12345"))
@@ -495,7 +467,6 @@ func (suite *BucketTestSuite) TestWalk() {
 		return nil
 	})
 	suite.NoError(err)
-	suite.NoError(suite.bucket.RemoveAll(ctx, name))
 }
 
 func (suite *BucketTestSuite) TestWalkSkipDir() {
@@ -531,7 +502,6 @@ func (suite *BucketTestSuite) TestWalkSkipDir() {
 	if suite.NoError(err) {
 		suite.Equal(expected, actual)
 	}
-	suite.NoError(suite.bucket.RemoveAll(ctx, name))
 }
 
 func (suite *BucketTestSuite) TestWalkStop() {
@@ -561,7 +531,6 @@ func (suite *BucketTestSuite) TestWalkStop() {
 	if suite.NoError(err) {
 		suite.Empty(actual)
 	}
-	suite.NoError(suite.bucket.RemoveAll(ctx, name))
 }
 
 func (suite *BucketTestSuite) TestWalkFile() {
@@ -582,7 +551,6 @@ func (suite *BucketTestSuite) TestWalkFile() {
 		return nil
 	})
 	suite.NoError(err)
-	suite.NoError(suite.bucket.Remove(ctx, name))
 
 	err = suite.bucket.(bucketly.Walkable).Walk(ctx, "this_does_not_exists", func(item bucketly.Item, err error) error {
 		suite.True(false)
@@ -605,7 +573,6 @@ func (suite *BucketTestSuite) TestStatFile() {
 	if !suite.NoError(err) {
 		return
 	}
-	suite.NoError(suite.bucket.Remove(ctx, name))
 
 	suite.Equal(name, info.Name())
 	suite.False(info.IsDir())
@@ -658,7 +625,6 @@ func (suite *BucketTestSuite) TestNewReaderFile() {
 	defer r.Close()
 
 	content, err := ioutil.ReadAll(r)
-	suite.NoError(suite.bucket.Remove(ctx, name))
 	if !suite.NoError(err) {
 		return
 	}
@@ -675,7 +641,6 @@ func (suite *BucketTestSuite) TestNewReaderDir() {
 
 	_, err = suite.bucket.NewReader(ctx, bucketly.Join(suite.bucket, name, "test1/test2/"))
 	suite.Error(err)
-	suite.NoError(suite.bucket.RemoveAll(ctx, name))
 }
 
 func (suite *BucketTestSuite) TestCopy() {
@@ -689,7 +654,6 @@ func (suite *BucketTestSuite) TestCopy() {
 	destBucket := suite.newBucket("dest")
 	dest := "test_transfer_dest.txt"
 	suite.NoError(destBucket.Copy(ctx, bucketly.NewItem(suite.bucket, name), dest))
-	suite.NoError(suite.bucket.Remove(ctx, name))
 	suite.NoError(destBucket.Remove(ctx, dest))
 
 	manager := suite.newBucketManager(destBucket)
@@ -712,7 +676,6 @@ func (suite *BucketTestSuite) TestCopyAll() {
 	if suite.NoError(destBucket.CopyAll(ctx, bucketly.NewItem(suite.bucket, name), dest)) {
 		suite.testWalkDeepDir(destBucket.(bucketly.Walkable), dest)
 	}
-	suite.NoError(suite.bucket.RemoveAll(ctx, name))
 	suite.NoError(destBucket.RemoveAll(ctx, dest))
 
 	manager := suite.newBucketManager(destBucket)
@@ -821,8 +784,6 @@ func (suite *BucketTestSuite) TestItems() {
 			suite.Equal(test.expected, actual, i)
 		})
 	}
-
-	suite.NoError(suite.bucket.RemoveAll(ctx, baseDir))
 }
 
 func (suite *BucketTestSuite) TestChmod() {
@@ -870,10 +831,6 @@ func (suite *BucketTestSuite) TestChmod() {
 		}
 
 		suite.Equal(test.mode, item.Mode().Perm(), i)
-	}
-
-	for i, test := range tests {
-		suite.NoError(suite.bucket.RemoveAll(ctx, test.name), i)
 	}
 }
 
