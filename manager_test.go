@@ -1,22 +1,44 @@
-package s3_test
+package bucketly_test
 
 import (
 	"context"
 	"github.com/stretchr/testify/suite"
 	"github.com/vcraescu/bucketly"
-	"github.com/vcraescu/bucketly/s3"
+	"github.com/vcraescu/bucketly/local"
 	"os"
 	"testing"
 )
 
-type S3BucketManagerTestSuite struct {
+type BucketManagerTestSuite struct {
 	suite.Suite
+
+	newBucket  func(name string) bucketly.Bucket
+	newManager func(bucket bucketly.Bucket) bucketly.BucketManager
 }
 
-func (suite *S3BucketManagerTestSuite) TestCreateAndRemove() {
+func TestS3BucketManagerTestSuite(t *testing.T) {
+	s := new(BucketManagerTestSuite)
+	s.newBucket = newS3Bucket
+	s.newManager = newS3BucketManager
+
+	suite.Run(t, s)
+}
+
+func TestLocalBucketManagerTestSuite(t *testing.T) {
+	s := new(BucketManagerTestSuite)
+	s.newBucket = func(name string) bucketly.Bucket {
+		return local.NewBucket(name)
+	}
+
+	s.newManager = newLocalBucketManager
+
+	suite.Run(t, s)
+}
+
+func (suite *BucketManagerTestSuite) TestCreateAndRemove() {
 	ctx := context.Background()
 	bucket := suite.newBucket(os.Getenv("AWS_S3_BUCKET"))
-	manager := s3.NewBucketManager(bucket)
+	manager := suite.newManager(bucket)
 	if !suite.NoError(manager.Create(ctx)) {
 		return
 	}
@@ -25,10 +47,10 @@ func (suite *S3BucketManagerTestSuite) TestCreateAndRemove() {
 	suite.NoError(manager.Remove(ctx))
 }
 
-func (suite *S3BucketManagerTestSuite) TestClean() {
+func (suite *BucketManagerTestSuite) TestClean() {
 	ctx := context.Background()
 	bucket := suite.newBucket(os.Getenv("AWS_S3_BUCKET"))
-	manager := s3.NewBucketManager(bucket)
+	manager := suite.newManager(bucket)
 	if !suite.NoError(manager.Create(ctx)) {
 		return
 	}
@@ -38,22 +60,7 @@ func (suite *S3BucketManagerTestSuite) TestClean() {
 	suite.NoError(manager.Remove(ctx))
 }
 
-func (suite *S3BucketManagerTestSuite) newBucket(name string) *s3.Bucket {
-	bucket, err := s3.NewBucket(
-		name,
-		s3.WithRegion(os.Getenv("AWS_S3_REGION")),
-		s3.WithAccessKey(os.Getenv("AWS_S3_ACCESS_KEY")),
-		s3.WithSecretAccessKey(os.Getenv("AWS_S3_SECRET_ACCESS_KEY")),
-		s3.WithEndpoint(os.Getenv("AWS_S3_ENDPOINT")),
-	)
-	if err != nil {
-		panic(err)
-	}
-
-	return bucket
-}
-
-func (suite *S3BucketManagerTestSuite) createDeepDir(ctx context.Context, bucket bucketly.Bucket, baseDir string) error {
+func (suite *BucketManagerTestSuite) createDeepDir(ctx context.Context, bucket bucketly.Bucket, baseDir string) error {
 	if err := bucket.MkdirAll(ctx, bucketly.Join(bucket, baseDir, "test1/test2/test3/")); err != nil {
 		return err
 	}
@@ -86,8 +93,4 @@ func (suite *S3BucketManagerTestSuite) createDeepDir(ctx context.Context, bucket
 	}
 
 	return nil
-}
-
-func TestS3BucketManagerTestSuite(t *testing.T) {
-	suite.Run(t, new(S3BucketManagerTestSuite))
 }

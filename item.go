@@ -2,6 +2,7 @@ package bucketly
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -9,6 +10,16 @@ import (
 )
 
 type (
+	Item interface {
+		fmt.Stringer
+		os.FileInfo
+
+		Bucket() Bucket
+		Open(context.Context) (io.ReadCloser, error)
+		ETag() (string, error)
+		Metadata() (Metadata, error)
+	}
+
 	BucketItem struct {
 		bucket   Bucket
 		name     string
@@ -111,6 +122,10 @@ func (i *BucketItem) Sys() interface{} {
 		}
 	}
 	return i.sys
+}
+
+func (i *BucketItem) SetSys(sys interface{}) {
+	i.sys = sys
 }
 
 func (i *BucketItem) Open(ctx context.Context) (io.ReadCloser, error) {
