@@ -560,53 +560,70 @@ func (suite *BucketTestSuite) TestWalkFile() {
 	suite.NoError(err)
 }
 
-func (suite *BucketTestSuite) TestStatFile() {
+func (suite *BucketTestSuite) TestStat() {
 	ctx := context.Background()
-	name := "test_stat_file.html"
+	tests := []struct {
+		name   string
+		path   string
+		dir    bool
+		size   int64
+		create func(name string) error
+		err    error
+	}{
+		{
+			name: "file",
+			path: "test_stat_file.html",
+			create: func(name string) error {
+				_, err := suite.bucket.Write(ctx, name, []byte{1, 2, 3})
 
-	_, err := suite.bucket.Write(ctx, name, []byte{1, 2, 3})
-	if !suite.NoError(err) {
-		return
+				return err
+			},
+			size: 3,
+		},
+		{
+			name: "dir",
+			path: "test_stat_dir/test1/test2/test3/",
+			create: func(name string) error {
+				return suite.bucket.MkdirAll(ctx, name)
+			},
+			dir: true,
+		},
+		{
+			name: "non existing path",
+			path: "does_not_exits",
+			create: func(name string) error {
+				return nil
+			},
+			err: os.ErrNotExist,
+		},
 	}
 
-	info, err := suite.bucket.Stat(ctx, name)
-	if !suite.NoError(err) {
-		return
-	}
+	for _, test := range tests {
+		suite.Run(test.name, func() {
+			err := test.create(test.path)
+			if !suite.NoError(err) {
+				return
+			}
 
-	suite.Equal(name, info.Name())
-	suite.False(info.IsDir())
-	suite.EqualValues(3, info.Size())
-	suite.NotNil(info.Mode())
+			item, err := suite.bucket.Stat(ctx, test.path)
+			if test.err != nil {
+				if err == os.ErrNotExist {
+					suite.True(os.IsNotExist(err))
+				}
 
-	_, err = suite.bucket.Stat(ctx, "does_not_exists")
-	if suite.Error(err) {
-		suite.True(os.IsNotExist(err))
-	}
-}
+				return
+			}
 
-func (suite *BucketTestSuite) TestStatDir() {
-	ctx := context.Background()
-	name := "test_stat_dir/"
-	err := suite.createDeepDir(ctx, name)
-	if !suite.NoError(err) {
-		return
-	}
+			if !suite.NotNil(item) {
+				return
+			}
 
-	ps := string(suite.bucket.PathSeparator())
-	info, err := suite.bucket.Stat(ctx, bucketly.Join(suite.bucket, name, "test1/test2/test3/")+ps)
-	if !suite.NoError(err) {
-		return
-	}
-	suite.NoError(suite.bucket.RemoveAll(ctx, name))
-
-	suite.Equal(bucketly.Join(suite.bucket, name, "test1/test2/test3/")+ps, info.Name())
-	suite.True(info.IsDir())
-	suite.NotNil(info.Mode())
-
-	_, err = suite.bucket.Stat(ctx, bucketly.Join(suite.bucket, name, "test1/test2/test3/")+ps)
-	if suite.Error(err) {
-		suite.True(os.IsNotExist(err))
+			suite.Equal(test.dir, item.IsDir())
+			suite.NotNil(item.Mode())
+			if !test.dir {
+				suite.Equal(test.size, item.Size())
+			}
+		})
 	}
 }
 
